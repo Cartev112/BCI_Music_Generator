@@ -1,0 +1,369 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import * as echarts from "echarts";
+import Editor from "@monaco-editor/react";
+import { Terminal } from "xterm";
+import "xterm/css/xterm.css";
+import {
+  Activity,
+  Brain,
+  CircuitBoard,
+  Gauge,
+  LineChart,
+  ServerCog,
+  Settings,
+  Signal,
+  Sun,
+  Moon,
+  PlugZap,
+} from "lucide-react";
+
+// === B/W Mastermind Console ===
+// Monochrome only. No accent colors. Tight monospace typography.
+// Fonts: IBM Plex Mono (digital but clean). Swap for "Share Tech Mono" if you want more retro.
+
+export default function BCIControlRoomStarter() {
+  const [dark, setDark] = useState(true);
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  const termRef = useRef<HTMLDivElement | null>(null);
+  const termInstance = useRef<Terminal | null>(null);
+  const [connected, setConnected] = useState(false);
+
+  // Mock KPI data that wiggles over time
+  const [kpis, setKpis] = useState([
+    { label: "SPIKE RATE", unit: "spk/s", value: 1240 },
+    { label: "SNR", unit: "dB", value: 18.6 },
+    { label: "PACKET LOSS", unit: "%", value: 0.3 },
+    { label: "LATENCY", unit: "ms", value: 12.4 },
+  ]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setKpis((prev) =>
+        prev.map((k) => ({
+          ...k,
+          value: Number(
+            (
+              k.value +
+              (Math.random() - 0.5) * (k.label === "PACKET LOSS" ? 0.1 : 2)
+            ).toFixed(2)
+          ),
+        }))
+      );
+    }, 1200);
+    return () => clearInterval(id);
+  }, []);
+
+  // ECharts — monochrome line plot with different line styles (solid/dashed/dotted)
+  useEffect(() => {
+    if (!chartRef.current) return;
+    const chart = echarts.init(chartRef.current, undefined, { renderer: "canvas" });
+
+    const t0 = Date.now();
+    const makeData = () => {
+      const now = Date.now();
+      const pts = 120;
+      const base = (now - t0) / 800;
+      const series = [
+        Array.from({ length: pts }, (_, i) => [i, Math.sin((i + base) / 4) * 2 + 8 + Math.random() * 0.15]),
+        Array.from({ length: pts }, (_, i) => [i, Math.cos((i + base) / 5) * 1.5 + 6 + Math.random() * 0.15]),
+        Array.from({ length: pts }, (_, i) => [i, Math.sin((i + base) / 3) * 1.2 + 4 + Math.random() * 0.15]),
+      ];
+      return series;
+    };
+
+    const set = () => {
+      const [s1, s2, s3] = makeData();
+      chart.setOption({
+        backgroundColor: "transparent",
+        textStyle: { color: "var(--muted)" },
+        grid: { left: 40, right: 20, top: 24, bottom: 28 },
+        tooltip: { trigger: "axis", axisPointer: { type: "line", lineStyle: { color: "#fff", width: 1 } } },
+        xAxis: {
+          type: "value",
+          axisLabel: { color: "#9a9a9a" },
+          axisLine: { lineStyle: { color: "#1a1a1a" } },
+          splitLine: { lineStyle: { color: "#121212" } },
+        },
+        yAxis: {
+          type: "value",
+          name: "µV",
+          nameTextStyle: { color: "#9a9a9a" },
+          axisLabel: { color: "#9a9a9a" },
+          axisLine: { lineStyle: { color: "#1a1a1a" } },
+          splitLine: { lineStyle: { color: "#121212" } },
+        },
+        legend: { show: false },
+        series: [
+          { name: "Ch 1", type: "line", showSymbol: false, data: s1, smooth: 0.2, lineStyle: { width: 2, color: "#fff", type: "solid" } },
+          { name: "Ch 2", type: "line", showSymbol: false, data: s2, smooth: 0.2, lineStyle: { width: 2, color: "#fff", type: "dashed" } },
+          { name: "Ch 3", type: "line", showSymbol: false, data: s3, smooth: 0.2, lineStyle: { width: 2, color: "#fff", type: "dotted" } },
+        ],
+      });
+    };
+
+    set();
+    const timer = setInterval(set, 1000);
+    const onResize = () => chart.resize();
+    window.addEventListener("resize", onResize);
+
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("resize", onResize);
+      chart.dispose();
+    };
+  }, [dark]);
+
+  // xterm: monochrome theme + simple logs
+  useEffect(() => {
+    if (!termRef.current) return;
+    const term = new Terminal({
+      convertEol: true,
+      fontFamily: "var(--font-mono)",
+      fontSize: 12,
+      theme: { background: "#000000", foreground: "#ffffff", cursor: "#ffffff" },
+    });
+    term.open(termRef.current);
+    // FIX: avoid unterminated string — use escaped newline
+    term.writeln("BCI CONSOLE — type 'help'\\r\\n");
+    term.writeln("connecting: tcp://127.0.0.1:5555 …");
+    let i = 0;
+    const id = setInterval(() => {
+      i++;
+      term.writeln(
+        `t=${new Date().toLocaleTimeString()} | ch1=${(8 + Math.random()).toFixed(2)} µV | ch2=${(6 + Math.random()).toFixed(2)} µV | ch3=${(4 + Math.random()).toFixed(2)} µV`
+      );
+      if (i % 8 === 0) term.writeln("WARN: jitter detected; compensating…");
+    }, 1200);
+    termInstance.current = term;
+    return () => {
+      clearInterval(id);
+      term.dispose();
+      termInstance.current = null;
+    };
+  }, []);
+
+  const defaultConfig = useMemo(
+    () => `{
+  "stream": { "source": "tcp://127.0.0.1:5555", "channels": 3, "sampleRate": 1000 },
+  "preprocess": ["notch@60Hz", "bandpass@1-120Hz"],
+  "features": ["bandpower", "rms", "line-length"],
+  "ui": { "monochrome": true }
+}
+`,
+    []
+  );
+
+  const sessionId = useMemo(
+    () => Math.random().toString(16).slice(2, 10).toUpperCase(),
+    []
+  );
+
+  // --- SMOKE TESTS (runtime, dev-only): ensure essentials mount ---
+  useEffect(() => {
+    const tests: Array<[string, boolean]> = [
+      ["kpis length == 4", kpis.length === 4],
+      ["chartRef is ready (div)", !!chartRef.current],
+      ["theme var present", getComputedStyle(document.documentElement).getPropertyValue("--bg").trim().length > 0],
+    ];
+    tests.forEach(([name, ok]) => {
+      // eslint-disable-next-line no-console
+      console[ok ? "log" : "error"](`SMOKE ${ok ? "PASS" : "FAIL"}: ${name}`);
+    });
+  }, []);
+
+  return (
+    <div className={dark ? "dark" : "light"}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&display=swap');
+        :root {
+          --bg: #000000;
+          --panel: #0a0a0a;
+          --muted: #9a9a9a;
+          --text: #ffffff;
+          --line: #1a1a1a;
+          --grid: #101010;
+          --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+        }
+        .light {
+          --bg: #ffffff;
+          --panel: #f5f5f5;
+          --muted: #333333;
+          --text: #000000;
+          --line: #e5e5e5;
+          --grid: #efefef;
+        }
+        html, body, #__next { height: 100%; }
+      `}</style>
+
+      <div
+        className="min-h-screen bg-[var(--bg)] text-[var(--text)] flex"
+        style={{ fontFamily: "var(--font-mono)" }}
+      >
+        {/* Sidebar */}
+        <aside className="hidden md:flex w-64 shrink-0 flex-col border-r border-[var(--line)] bg-[var(--panel)]/90 backdrop-blur-sm">
+          <div className="px-5 py-4 border-b border-[var(--line)] flex items-center gap-2 tracking-[0.12em] uppercase">
+            <CircuitBoard className="w-4 h-4" />
+            <span className="font-semibold">BCI CONTROL</span>
+          </div>
+          <nav className="p-3 space-y-1 text-sm">
+            <NavItem icon={<Activity />} label="Dashboard" active />
+            <NavItem icon={<Signal />} label="Streams" />
+            <NavItem icon={<LineChart />} label="Pipelines" />
+            <NavItem icon={<Brain />} label="Models" />
+            <NavItem icon={<ServerCog />} label="Nodes" />
+            <NavItem icon={<Settings />} label="Settings" />
+          </nav>
+          <div className="mt-auto p-3 text-[10px] text-[var(--muted)] tracking-[0.18em] uppercase">
+            <div>v0.2 — mono</div>
+            <div className="mt-1">session: {sessionId}</div>
+          </div>
+        </aside>
+
+        {/* Main column */}
+        <div className="flex-1 flex flex-col">
+          {/* Top bar */}
+          <header className="h-14 border-b border-[var(--line)] bg-[var(--panel)]/90 backdrop-blur-sm flex items-center justify-between px-4">
+            <div className="flex items-center gap-3">
+              <Gauge className="w-4 h-4" />
+              <h1 className="text-sm tracking-[0.18em] uppercase">Mastermind Console</h1>
+              <span className="text-[var(--muted)] text-xs tracking-[0.2em] uppercase">• live</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setConnected((c) => !c)}
+                className="inline-flex items-center gap-2 rounded border border-[var(--line)] px-3 py-1.5 text-xs hover:bg-white/5 tracking-[0.1em] uppercase"
+              >
+                <PlugZap className="w-3.5 h-3.5" />
+                {connected ? "Connected" : "Connect"}
+              </button>
+              <button
+                onClick={() => setDark((d) => !d)}
+                className="inline-flex items-center gap-2 rounded border border-[var(--line)] px-3 py-1.5 text-xs hover:bg-white/5 tracking-[0.1em] uppercase"
+                aria-label="Toggle theme"
+              >
+                {dark ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+                {dark ? "Light" : "Dark"}
+              </button>
+            </div>
+          </header>
+
+          {/* KPIs */}
+          <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 p-4">
+            {kpis.map((k) => (
+              <div
+                key={k.label}
+                className="rounded-xl border border-[var(--line)] bg-[var(--panel)]/90 p-4 shadow-sm"
+              >
+                <div className="text-[10px] tracking-[0.2em] uppercase text-[var(--muted)]">{k.label}</div>
+                <div className="mt-1 text-2xl font-semibold tabular-nums">{k.value}
+                  <span className="ml-1 text-sm text-[var(--muted)]">{k.unit}</span>
+                </div>
+                <div className="mt-3 h-[6px] w-full rounded bg-[var(--grid)]">
+                  <div
+                    className="h-[6px] rounded bg-[var(--text)] transition-all"
+                    style={{ width: `${Math.min(100, Math.abs((k.value % 20) * 5))}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </section>
+
+          {/* Main grid */}
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 p-4 pb-6">
+            {/* Chart panel */}
+            <div className="xl:col-span-2 rounded-xl border border-[var(--line)] bg-[var(--panel)]/90 overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--line)]">
+                <div className="flex items-center gap-2">
+                  <LineChart className="w-4 h-4" />
+                  <span className="text-xs tracking-[0.16em] uppercase">Neural Channels</span>
+                </div>
+                <div className="text-[10px] text-[var(--muted)] tracking-[0.2em] uppercase">µV • 1kHz • BP 1–120Hz</div>
+              </div>
+              <div className="px-4 pt-2 text-[10px] text-[var(--muted)] tracking-[0.24em] uppercase flex gap-4">
+                <LegendSwatch styleName="solid" label="Ch1" />
+                <LegendSwatch styleName="dashed" label="Ch2" />
+                <LegendSwatch styleName="dotted" label="Ch3" />
+              </div>
+              <div ref={chartRef} className="h-[360px] w-full" />
+            </div>
+
+            {/* Right stack: editor + terminal */}
+            <div className="space-y-4">
+              <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)]/90 overflow-hidden">
+                <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--line)]">
+                  <Settings className="w-4 h-4" />
+                  <span className="text-xs tracking-[0.16em] uppercase">Live Config (JSON)</span>
+                </div>
+                <Editor
+                  height="220px"
+                  defaultLanguage="json"
+                  defaultValue={defaultConfig}
+                  theme={dark ? "bw" : "bw"}
+                  onMount={(editor, monaco) => {
+                    monaco.editor.defineTheme('bw', {
+                      base: 'vs-dark',
+                      inherit: false,
+                      rules: [{ token: '', foreground: 'FFFFFF' }],
+                      colors: {
+                        'editor.background': '#000000',
+                        'editor.foreground': '#FFFFFF',
+                        'editorLineNumber.foreground': '#444444',
+                        'editorLineNumber.activeForeground': '#888888',
+                        'editorCursor.foreground': '#FFFFFF',
+                        'editor.selectionBackground': '#222222',
+                        'editor.inactiveSelectionBackground': '#111111',
+                        'editorWhitespace.foreground': '#202020',
+                        'editorIndentGuide.background': '#1a1a1a',
+                        'editorIndentGuide.activeBackground': '#2a2a2a',
+                      }
+                    });
+                    monaco.editor.setTheme('bw');
+                  }}
+                  options={{ minimap: { enabled: false }, fontSize: 12, fontLigatures: false, renderWhitespace: 'none' }}
+                />
+              </div>
+
+              <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)]/90 overflow-hidden">
+                <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--line)]">
+                  <Activity className="w-4 h-4" />
+                  <span className="text-xs tracking-[0.16em] uppercase">Console</span>
+                </div>
+                <div ref={termRef} className="h-[220px]" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NavItem({ icon, label, active = false }: { icon: React.ReactNode; label: string; active?: boolean }) {
+  return (
+    <button
+      className={`w-full flex items-center gap-2 rounded px-3 py-2 hover:bg-white/5 transition ${
+        active ? "bg-white/5" : ""
+      }`}
+    >
+      <span className="w-4 h-4 text-[var(--text)]">{icon}</span>
+      <span className="text-[0.92rem] tracking-[0.06em]">{label}</span>
+    </button>
+  );
+}
+
+function LegendSwatch({ styleName, label }: { styleName: 'solid' | 'dashed' | 'dotted'; label: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span
+        className="inline-block w-8 h-[2px] bg-white"
+        style={{
+          backgroundImage: styleName === 'solid' ? 'none' :
+            styleName === 'dashed' ? 'linear-gradient(90deg, #fff 50%, rgba(0,0,0,0) 0%)' :
+            'repeating-linear-gradient(90deg, #fff, #fff 2px, rgba(0,0,0,0) 2px, rgba(0,0,0,0) 4px)',
+          backgroundSize: styleName === 'dashed' ? '8px 2px' : undefined,
+        }}
+      />
+      <span className="text-[10px] tracking-[0.2em] uppercase text-[var(--muted)]">{label}</span>
+    </div>
+  );
+}

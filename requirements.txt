@@ -1,0 +1,10 @@
+brainflow
+numpy
+scipy
+mne
+scikit-learn
+joblib
+python-osc
+pytest
+sounddevice
+soundfile
