@@ -59,10 +59,6 @@ python main.py --mode demo    # Demo without hardware
 - **Testing**: `python test_integration.py`
 - **Documentation**: See `INTEGRATION_GUIDE.md` for detailed setup
 
-## License
-
-MIT License - see LICENSE file for details
-
 ## Contributing
 
 1. Fork the repository
